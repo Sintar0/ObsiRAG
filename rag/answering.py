@@ -31,15 +31,15 @@ def compress_document(doc: str, keywords: list[str], max_chars: int) -> str:
 
 
 def generate_answer(query, results):
-    context_text = ""
-    sources = set()
-
     documents = results["documents"][0]
     metadatas = results["metadatas"][0]
     keywords = results.get("keywords", [])
 
     documents = documents[:MAX_DOCS]
     metadatas = metadatas[:MAX_DOCS]
+
+    rag_context_text = ""
+    sources = set()
 
     for i, doc in enumerate(documents):
         source_path = metadatas[i]["source"]
@@ -51,32 +51,41 @@ def generate_answer(query, results):
             continue
 
         addition = f"---\nSOURCE: {filename}\nCONTENU:\n{compressed}\n\n"
-        if len(context_text) + len(addition) > MAX_CONTEXT_CHARS:
+        if len(rag_context_text) + len(addition) > MAX_CONTEXT_CHARS:
             break
 
-        context_text += addition
+        rag_context_text += addition
 
-    verified_context = build_verified_context(metadatas, keywords)
+    verified_context = build_verified_context(metadatas, keywords, query=query)
+
+    context_text = ""
     if verified_context:
-        remaining = MAX_CONTEXT_CHARS - len(context_text)
-        if remaining > 200:
-            context_text += "\n" + verified_context[:remaining]
+        primary_block = f"=== CONTEXTE MCP (PRIORITAIRE) ===\n{verified_context}\n"
+        context_text = primary_block[:MAX_CONTEXT_CHARS]
+
+    remaining = MAX_CONTEXT_CHARS - len(context_text)
+    if rag_context_text and remaining > 200:
+        rag_block = f"\n=== CONTEXTE RAG (COMPLEMENT) ===\n{rag_context_text}"
+        context_text += rag_block[:remaining]
 
     print(
         f"{Colors.GREEN}📚 {len(documents)} fragments trouvés dans : {', '.join(sources)}{Colors.ENDC}"
     )
     if verified_context:
-        print(f"{Colors.BLUE}🧭 Vérification étendue via notes complètes activée{Colors.ENDC}")
+        print(
+            f"{Colors.BLUE}🧭 Mode MCP-first actif : notes complètes prioritaires, RAG en complément{Colors.ENDC}"
+        )
 
     system_prompt = f"""
     Tu es un assistant personnel intelligent connecté aux notes Obsidian de l'utilisateur.
 
     Règles :
-    1. Réponds en priorité avec les informations du CONTEXTE ci-dessous.
+    1. Réponds d'abord avec les informations du bloc CONTEXTE MCP (prioritaire) s'il existe.
     2. Si le contexte contient la réponse complète, utilise-le et cite tes sources (ex: [Note.md]).
-    3. Si le contexte contient des éléments pertinents mais incomplets, propose une réponse utile en indiquant clairement ce qui vient des notes vs tes connaissances.
+    3. Utilise le bloc CONTEXTE RAG uniquement en complément si le bloc MCP est incomplet.
     4. Si le contexte ne contient rien de pertinent, réponds avec tes connaissances générales en précisant : "Je n'ai pas trouvé cette info dans tes notes, mais voici ce que je sais..."
-    5. Sois concis, structuré (Markdown) et naturel (évite un ton robotique).
+    5. Donne des réponses structurées, détaillées et pédagogiques (pas trop courtes).
+    6. Quand c'est pertinent, propose un mini résumé + points clés extraits des notes.
 
     CONTEXTE :
     {context_text}
