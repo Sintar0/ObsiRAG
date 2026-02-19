@@ -1,0 +1,93 @@
+# Sprint V1-alpha — Édition fiable de notes
+
+## Objectif du sprint
+
+Construire une première boucle d'édition **preview-only** (sans écriture) pour valider le pipeline :
+
+1. parser une requête d'édition en langage naturel,
+2. identifier une cible de note plausible,
+3. générer une prévisualisation de modification.
+
+Ce sprint sert à sécuriser les fondations avant la phase d'écriture réelle.
+
+---
+
+## Scope V1-alpha
+
+### Inclus
+
+- Contrats de fonctions dans `rag/editing.py`
+- `parse_edit_request` déterministe (règles/regex, sans LLM)
+- mode CLI `edit:` pour déclencher le flux d'édition
+- preview textuelle (sans mutation de fichier)
+
+### Exclus
+
+- Écriture effective dans les notes
+- Édition multi-fichiers
+- Résolution intelligente avancée en cas d'ambiguïté
+
+---
+
+## Étapes d'implémentation (état actuel)
+
+**Statut global:** ✅ V1-alpha terminé (preview-only)
+
+### Étape 1 — Interface d'édition
+
+- [x] Créer `rag/editing.py`
+- [x] Définir les stubs de base
+- [x] Stabiliser les types (`EditRequest`, `EditCandidate`, `EditPreview`)
+
+### Étape 2 — Parse déterministe
+
+- [x] Implémenter `parse_edit_request(query)` (version squelette)
+- [x] Extraire : `action`, `target_file`, `content`, `metadata.confidence`
+- [x] Couvrir les actions : `add`, `edit`, `create`, `unknown`
+- [ ] Durcir les regex (cas avec guillemets, accents, formulations variées)
+
+### Étape 3 — Résolution cible (version simple)
+
+- [x] Implémenter `resolve_target_file(intent)` (retour de candidats)
+- [x] Retourner un format stable pour la CLI
+- [ ] Brancher la résolution RAG top-k + vérification MCP/API *(reporté V1-beta)*
+
+### Étape 4 — Preview
+
+- [x] Implémenter `build_edit_preview(note_text, intent)`
+- [x] Afficher `mode`, `target_file`, `before`, `after`, `instruction`
+- [x] Remplacer les placeholders (`<note vide/non chargée>`, `[REPLACE TODO]`) par un rendu réel minimal
+
+### Étape 5 — Intégration CLI (sans write)
+
+- [x] Dans `query.py`, route spéciale pour les entrées `edit:`
+- [x] Afficher la preview et terminer sans appliquer
+
+---
+
+## Definition of Done (V1-alpha)
+
+- Le module `rag/editing.py` compile sans erreur de type Python.
+- 5 requêtes de test sont parsées correctement (action/cible/contenu).
+- Le mode `edit:` produit une preview lisible.
+- Aucune écriture réelle n'est effectuée.
+
+---
+
+## Jeux de tests manuels (minimum)
+
+1. `edit: Ajoute dans TODO.md une tâche pour faire les courses`
+2. `edit: Modifie Réunion.md pour ajouter un point budget`
+3. `edit: Crée Projet-X.md avec une checklist`
+4. `edit: Ajoute une tâche pour demain` (sans cible explicite)
+5. `edit: blabla` (intention inconnue)
+
+---
+
+## Sortie attendue du sprint
+
+- Commit conseillé : `v1-alpha.0-preview`
+- Livrables :
+  - `rag/editing.py` (stubs + parse en place)
+  - branchement CLI `edit:`
+  - ce document mis à jour
