@@ -12,7 +12,9 @@ MAX_CONTEXT_CHARS = 4500
 KEYWORD_WEIGHT = 60
 
 # Obsidian direct verification
-VAULT_ROOT = os.path.abspath(os.getenv("VAULT_PATH", "./Obsidian"))
+VAULT_ROOT = os.path.abspath(
+    os.path.expanduser(os.getenv("VAULT_PATH", "~/Obsidian"))
+)
 OBSIDIAN_HOST = os.getenv("OBSIDIAN_HOST", "127.0.0.1")
 OBSIDIAN_PORT = int(os.getenv("OBSIDIAN_PORT", "27124"))
 OBSIDIAN_API_KEY = os.getenv("OBSIDIAN_API_KEY", "")

@@ -31,7 +31,7 @@ Suppression du fichier racine :
 
 - `Révision partiel S3 management Si.md`
 
-Le contenu source reste dans le vault Obsidian (`./Obsidian/...`) et l'indexation repose déjà sur ce dossier.
+Le contenu source est désormais dans un vault Obsidian externe (`~/Obsidian/...`).
 
 ### 3) Vérification technique
 
@@ -45,7 +45,7 @@ Compilation Python validée :
 
 ```text
 obsidian-rag/
-├── Obsidian/                     # Vault source (notes markdown)
+├── (vault externe) ~/Obsidian/   # Vault source (notes markdown)
 ├── chroma_db/                    # Base vectorielle persistante
 ├── doc/
 │   ├── Log#1.md
@@ -60,7 +60,7 @@ obsidian-rag/
 │   └── text_processing.py        # normalize/extract keywords
 ├── analyze_vault.py              # statistiques structure du vault
 ├── check_db.py                   # inspection rapide de la base Chroma
-├── ingest_v2.py                  # ingestion/chunking optimisé
+├── ingest.py                     # ingestion/chunking optimisé
 ├── query.py                      # entrypoint CLI (façade)
 ├── README.md
 ├── pyproject.toml

@@ -6,7 +6,7 @@ import chromadb
 import ollama
 
 # --- CONFIGURATION ---
-VAULT_PATH = "./Obsidian"
+VAULT_PATH = os.path.expanduser("~/Obsidian")
 
 # Dossiers à ignorer (Sensible à la casse !)
 EXCLUDED_DIRS = {
