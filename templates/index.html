@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Obsidian RAG</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
+  <style>
+    :root {
+      --bg: #1e1e2e;
+      --surface: #2a2a3e;
+      --surface2: #313145;
+      --accent: #cba6f7;
+      --accent2: #89b4fa;
+      --green: #a6e3a1;
+      --red: #f38ba8;
+      --text: #cdd6f4;
+      --subtext: #a6adc8;
+      --border: #45475a;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 15px; font-weight: 600; color: var(--accent); }
+    header span { color: var(--subtext); font-size: 12px; }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 8px 20px 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .tab {
+      padding: 6px 18px;
+      border-radius: var(--radius) var(--radius) 0 0;
+      cursor: pointer;
+      color: var(--subtext);
+      border: 1px solid transparent;
+      border-bottom: none;
+      background: transparent;
+      font-size: 13px;
+      transition: all 0.15s;
+    }
+    .tab.active { background: var(--bg); color: var(--accent); border-color: var(--border); }
+    .tab:hover:not(.active) { color: var(--text); }
+    .panels { flex: 1; overflow: hidden; }
+    .panel { display: none; height: 100%; flex-direction: column; padding: 14px 20px; gap: 10px; }
+    .panel.active { display: flex; }
+
+    /* Inputs */
+    input[type="text"], textarea {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
+    textarea { resize: none; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; line-height: 1.5; }
+    button {
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: var(--radius);
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    button.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); font-weight: 400; }
+    button.success-btn { background: var(--green); color: #1e1e2e; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Ask panel */
+    .ask-input-row { display: flex; gap: 8px; }
+    .ask-input-row input { flex: 1; }
+    .answer-box {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      overflow-y: auto;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+    .answer-box p { margin-bottom: 8px; }
+    .answer-box h1,.answer-box h2,.answer-box h3 { color: var(--accent); margin: 12px 0 6px; }
+    .answer-box ul,.answer-box ol { padding-left: 20px; margin-bottom: 8px; }
+    .answer-box li { margin-bottom: 3px; }
+    .answer-box code { background: var(--surface2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+    .answer-box pre { background: var(--surface2); padding: 10px; border-radius: var(--radius); overflow-x: auto; margin-bottom: 8px; }
+    .answer-box pre code { background: none; padding: 0; }
+    .answer-box blockquote { border-left: 3px solid var(--accent); padding-left: 10px; color: var(--subtext); margin-bottom: 8px; }
+    .answer-box .katex { font-size: 1.1em; }
+    .answer-box .placeholder { color: var(--subtext); font-style: italic; }
+    .sources-bar { display: flex; gap: 6px; flex-wrap: wrap; min-height: 22px; }
+    .source-tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 11px; color: var(--accent2); }
+
+    /* Progress bar */
+    .progress-bar { height: 2px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 10px; }
+    .progress-bar-inner { height: 100%; width: 30%; background: var(--accent); border-radius: 2px; animation: progress-slide 1s ease-in-out infinite; }
+    @keyframes progress-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+
+    /* Note panel — split view */
+    .note-toolbar { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+    .note-toolbar input { flex: 1; }
+    .split-view {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .split-pane {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .pane-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--subtext);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      flex-shrink: 0;
+    }
+    .note-editor {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text);
+      white-space: pre-wrap;
+      min-height: 0;
+    }
+    .note-preview {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      overflow-y: auto;
+      font-size: 13px;
+      line-height: 1.6;
+      min-height: 0;
+    }
+    .note-preview p { margin-bottom: 8px; }
+    .note-preview h1,.note-preview h2,.note-preview h3 { color: var(--accent); margin: 10px 0 5px; }
+    .note-preview ul,.note-preview ol { padding-left: 18px; margin-bottom: 6px; }
+    .note-preview li { margin-bottom: 2px; }
+    .note-preview code { background: var(--surface2); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+    .note-preview pre { background: var(--surface2); padding: 10px; border-radius: var(--radius); overflow-x: auto; margin-bottom: 8px; }
+    .note-preview pre code { background: none; }
+    .note-preview blockquote { border-left: 3px solid var(--accent); padding-left: 10px; color: var(--subtext); margin-bottom: 8px; }
+    .note-preview .katex { font-size: 1em; }
+    .note-preview .placeholder { color: var(--subtext); font-style: italic; }
+    .note-edit-bar { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+    .note-edit-bar input { flex: 1; }
+    .status-msg { font-size: 12px; padding: 4px 0; }
+    .status-msg.ok { color: var(--green); }
+    .status-msg.err { color: var(--red); }
+
+    /* Spinner */
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 4px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🔮 Obsidian RAG</h1>
+  <span>vault local · mistral-small3.2</span>
+</header>
+
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('ask', this)">💬 Ask</button>
+  <button class="tab" onclick="switchTab('note', this)">📝 Note</button>
+</div>
+
+<div class="panels">
+
+  <!-- ASK -->
+  <div id="panel-ask" class="panel active">
+    <div class="ask-input-row">
+      <input type="text" id="ask-input" placeholder="Pose ta question sur tes notes…" onkeydown="if(event.key==='Enter') submitAsk()">
+      <button onclick="submitAsk()">Envoyer</button>
+    </div>
+    <div class="sources-bar" id="sources-bar"></div>
+    <div class="answer-box" id="answer-box">
+      <span class="placeholder">La réponse apparaîtra ici…</span>
+    </div>
+  </div>
+
+  <!-- NOTE -->
+  <div id="panel-note" class="panel">
+    <div class="note-toolbar">
+      <input type="text" id="note-path" placeholder="Tape pour filtrer les notes…" list="notes-datalist" autocomplete="off">
+      <datalist id="notes-datalist"></datalist>
+      <button onclick="loadNote()">Charger</button>
+    </div>
+
+    <div class="split-view">
+      <!-- Gauche : source brute éditable -->
+      <div class="split-pane">
+        <div class="pane-label">📄 Note originale</div>
+        <textarea id="note-raw" class="note-editor" placeholder="Charge une note ou colle du contenu ici…" oninput="syncPreviewLeft()"></textarea>
+      </div>
+
+      <!-- Droite : preview rendu (note originale puis proposition LLM) -->
+      <div class="split-pane">
+        <div class="pane-label" id="preview-label">👁 Aperçu</div>
+        <div id="note-preview" class="note-preview">
+          <span class="placeholder">La note rendue apparaîtra ici après chargement…</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="note-edit-bar">
+      <input type="text" id="edit-query" placeholder="Instruction pour le LLM, ex: Transforme en TODO, résume, ajoute une intro…" onkeydown="if(event.key==='Enter') submitNoteEdit()">
+      <button onclick="submitNoteEdit()" id="btn-edit">Modifier</button>
+      <button class="secondary success-btn" onclick="writeProposal()" id="btn-write" disabled>💾 Écrire dans le vault</button>
+    </div>
+    <div id="note-status" class="status-msg"></div>
+  </div>
+
+</div>
+
+<script>
+  function switchTab(name, el) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('panel-' + name).classList.add('active');
+  }
+
+  function renderMarkdown(el, text) {
+    el.innerHTML = marked.parse(text);
+    renderMathInElement(el, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false},
+        {left: '\\(', right: '\\)', display: false},
+        {left: '\\[', right: '\\]', display: true},
+      ],
+      throwOnError: false,
+    });
+  }
+
+  // ── ASK ──────────────────────────────────────────────
+  function submitAsk() {
+    const query = document.getElementById('ask-input').value.trim();
+    if (!query) return;
+    const box = document.getElementById('answer-box');
+    const sourcesBar = document.getElementById('sources-bar');
+    let rawText = '';
+    box.innerHTML = '<div class="progress-bar"><div class="progress-bar-inner"></div></div><span class="placeholder">Réflexion en cours…</span>';
+    sourcesBar.innerHTML = '';
+
+    const form = new FormData();
+    form.append('query', query);
+
+    fetch('/api/ask', { method: 'POST', body: form }).then(res => {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) { renderMarkdown(box, rawText); return; }
+          const text = decoder.decode(value);
+          for (const line of text.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === 'chunk') {
+                rawText += data.content;
+                box.textContent = rawText;
+                box.scrollTop = box.scrollHeight;
+              } else if (data.type === 'done') {
+                renderMarkdown(box, rawText);
+                sourcesBar.innerHTML = data.sources.map(s => `<span class="source-tag">📄 ${s}</span>`).join('');
+              }
+            } catch {}
+          }
+          read();
+        });
+      }
+      read();
+    });
+  }
+
+  // ── NOTE ─────────────────────────────────────────────
+  let currentProposal = '';
+
+  function loadNote() {
+    const path = document.getElementById('note-path').value.trim();
+    if (!path) return;
+    const form = new FormData();
+    form.append('path', path);
+    setStatus('', '');
+    fetch('/api/note/get', { method: 'POST', body: form })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { setStatus(data.error, 'err'); return; }
+        document.getElementById('note-raw').value = data.content;
+        document.getElementById('btn-write').disabled = true;
+        currentProposal = '';
+        const preview = document.getElementById('note-preview');
+        document.getElementById('preview-label').textContent = '👁 Aperçu (note originale)';
+        renderMarkdown(preview, data.content);
+      });
+  }
+
+  function syncPreviewLeft() {
+    // pas de preview live de la source — on garde ça simple
+  }
+
+  function submitNoteEdit() {
+    const noteContent = document.getElementById('note-raw').value.trim();
+    const editQuery = document.getElementById('edit-query').value.trim();
+    if (!noteContent) { setStatus('Charge ou colle une note d\'abord.', 'err'); return; }
+    if (!editQuery) { setStatus('Saisis une instruction.', 'err'); return; }
+
+    const preview = document.getElementById('note-preview');
+    preview.innerHTML = '<div class="progress-bar"><div class="progress-bar-inner"></div></div><span class="placeholder">Le LLM modifie la note…</span>';
+    document.getElementById('preview-label').textContent = '✨ Proposition LLM';
+    document.getElementById('btn-write').disabled = true;
+    currentProposal = '';
+
+    const form = new FormData();
+    form.append('note_content', noteContent);
+    form.append('edit_query', editQuery);
+
+    fetch('/api/note/edit', { method: 'POST', body: form }).then(res => {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let raw = '';
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) { renderMarkdown(preview, raw); currentProposal = raw; document.getElementById('btn-write').disabled = false; document.getElementById('preview-label').textContent = '✨ Proposition LLM (prête)'; return; }
+          const text = decoder.decode(value);
+          for (const line of text.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.content) { raw += data.content; preview.textContent = raw; preview.scrollTop = preview.scrollHeight; }
+              if (data.done) { renderMarkdown(preview, raw); currentProposal = raw; document.getElementById('btn-write').disabled = false; }
+            } catch {}
+          }
+          read();
+        });
+      }
+      read();
+    });
+  }
+
+  function writeProposal() {
+    const path = document.getElementById('note-path').value.trim();
+    if (!path) { setStatus('Chemin de note manquant.', 'err'); return; }
+    if (!currentProposal) { setStatus('Aucune proposition à écrire.', 'err'); return; }
+
+    const form = new FormData();
+    form.append('path', path);
+    form.append('content', currentProposal);
+    form.append('mode', 'create');
+
+    fetch('/api/note/write', { method: 'POST', body: form })
+      .then(r => r.text())
+      .then(html => {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        const msg = tmp.textContent.trim();
+        setStatus(msg, msg.includes('✅') ? 'ok' : 'err');
+      });
+  }
+
+  function setStatus(msg, type) {
+    const el = document.getElementById('note-status');
+    el.textContent = msg;
+    el.className = 'status-msg' + (type ? ' ' + type : '');
+  }
+
+  // Charger la liste des notes pour l'autocomplétion
+  fetch('/api/notes/list')
+    .then(r => r.json())
+    .then(data => {
+      const dl = document.getElementById('notes-datalist');
+      dl.innerHTML = data.notes.map(p => `<option value="${p}">`).join('');
+    });
+
+  document.getElementById('ask-input').focus();
+</script>
+
+</body>
+</html>

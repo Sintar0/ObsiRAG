@@ -1,0 +1,228 @@
+"""
+Web UI — Obsidian RAG
+FastAPI + HTMX, transport HTTP local.
+
+Routes :
+  GET  /              — interface principale
+  POST /api/ask       — question → réponse LLM (streaming SSE)
+  POST /api/search    — recherche vectorielle → chunks
+  POST /api/todo      — texte → checklist TODO
+  POST /api/note/get  — lire une note
+  POST /api/note/write — écrire dans une note (active ou chemin)
+"""
+
+import json
+from typing import AsyncGenerator
+
+import uvicorn
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from rag.answering import generate_answer
+from rag.config import OBSIDIAN_API_KEY, OBSIDIAN_HOST, OBSIDIAN_PORT
+from rag.editing import format_last_answer_content
+from rag.obsidian_verify import fetch_obsidian_note
+from rag.retrieval import search_vault
+
+import ollama
+from rag.config import GENERATION_MODEL, MAX_CONTEXT_CHARS
+from rag.obsidian_verify import build_verified_context
+
+app = FastAPI(title="Obsidian RAG UI")
+templates = Jinja2Templates(directory="templates")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _build_answer_stream(query: str):
+    """Génère la réponse LLM en streaming SSE."""
+    results = search_vault(query, n_results=15)
+    documents = results["documents"][0]
+    metadatas = results["metadatas"][0]
+    keywords = results.get("keywords", [])
+
+    from rag.answering import compress_document
+    rag_context = ""
+    sources = set()
+    for i, doc in enumerate(documents[:8]):
+        src = metadatas[i]["source"].split("/")[-1]
+        sources.add(src)
+        compressed = compress_document(doc, keywords, 700)
+        if compressed:
+            rag_context += f"---\nSOURCE: {src}\nCONTENU:\n{compressed}\n\n"
+
+    verified = build_verified_context(metadatas, keywords, query=query)
+    context = ""
+    if verified:
+        context = f"=== CONTEXTE MCP (PRIORITAIRE) ===\n{verified}\n"
+    remaining = MAX_CONTEXT_CHARS - len(context)
+    if rag_context and remaining > 200:
+        context += f"\n=== CONTEXTE RAG (COMPLEMENT) ===\n{rag_context}"[:remaining]
+
+    system_prompt = f"""Tu es un assistant personnel connecté aux notes Obsidian de l'utilisateur.
+Règles :
+1. Priorité au bloc CONTEXTE MCP s'il existe.
+2. Cite tes sources (ex: [Note.md]).
+3. Réponds de façon structurée et pédagogique.
+4. Si rien de pertinent, réponds avec tes connaissances générales en le précisant.
+
+CONTEXTE :
+{context}"""
+
+    return system_prompt, query, list(sources)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.post("/api/ask")
+async def ask(query: str = Form(...)):
+    """Réponse LLM en streaming SSE."""
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        system_prompt, user_query, sources = _build_answer_stream(query)
+        full_answer = ""
+
+        stream = ollama.chat(
+            model=GENERATION_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_query},
+            ],
+            stream=True,
+        )
+
+        for chunk in stream:
+            content = chunk["message"]["content"]
+            full_answer += content
+            yield f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'sources': sources})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/search", response_class=HTMLResponse)
+async def search(query: str = Form(...)):
+    """Recherche vectorielle → fragments HTML."""
+    results = search_vault(query, n_results=10)
+    docs = results["documents"][0][:5]
+    metas = results["metadatas"][0][:5]
+
+    html = ""
+    for doc, meta in zip(docs, metas):
+        src = meta.get("source", "").split("/")[-1]
+        preview = doc[:300].replace("<", "&lt;").replace(">", "&gt;")
+        html += f"""
+        <div class="chunk">
+            <div class="chunk-source">📄 {src}</div>
+            <div class="chunk-content">{preview}…</div>
+        </div>"""
+    return HTMLResponse(html or "<p class='empty'>Aucun résultat.</p>")
+
+
+@app.post("/api/todo")
+async def make_todo(text: str = Form(...), format_hint: str = Form("todo checklist")):
+    """Transforme un texte en checklist TODO."""
+    result = format_last_answer_content(text, f"Crée une note avec {format_hint}")
+    return JSONResponse({"content": result})
+
+
+@app.get("/api/notes/list")
+async def notes_list():
+    """Liste tous les fichiers .md du vault (chemins relatifs)."""
+    from rag.obsidian_verify import build_vault_index
+    by_rel_path, _ = build_vault_index()
+    paths = sorted(by_rel_path.values(), key=lambda p: p.lower())
+    return JSONResponse({"notes": paths})
+
+
+@app.post("/api/note/get")
+async def note_get(path: str = Form(...)):
+    """Lit une note depuis le vault."""
+    content = fetch_obsidian_note(path)
+    if content is None:
+        return JSONResponse({"error": f"Note introuvable : {path}"})
+    return JSONResponse({"content": content})
+
+
+@app.post("/api/note/edit")
+async def note_edit(note_content: str = Form(...), edit_query: str = Form(...)):
+    """Propose une version modifiée de la note selon la requête utilisateur."""
+    system_prompt = (
+        "Tu es un assistant d'édition de notes Markdown.\n"
+        "L'utilisateur te donne une note existante et une instruction de modification.\n"
+        "Règles STRICTES :\n"
+        "1. Retourne TOUJOURS la note COMPLÈTE avec la modification intégrée — jamais un fragment.\n"
+        "2. Ne retourne QUE le contenu Markdown brut, sans bloc de code englobant, sans explication, sans commentaire.\n"
+        "3. Respecte la structure, le style et la langue de la note originale.\n"
+        "4. Applique l'instruction avec précision sans inventer de contenu non demandé.\n"
+        "5. Conserve le LaTeX tel quel (blocs $$ et $ inchangés).\n"
+        "6. Si l'instruction dit 'ajoute X à la fin', copie toute la note puis ajoute X à la fin."
+    )
+    prompt = f"NOTE ORIGINALE:\n{note_content}\n\nINSTRUCTION: {edit_query}"
+
+    async def stream_edit():
+        s = ollama.chat(
+            model=GENERATION_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            stream=True,
+        )
+        for chunk in s:
+            content = chunk["message"]["content"]
+            yield f"data: {json.dumps({'content': content})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return StreamingResponse(stream_edit(), media_type="text/event-stream")
+
+
+@app.post("/api/note/write", response_class=HTMLResponse)
+async def note_write(path: str = Form(...), content: str = Form(...), mode: str = Form("create")):
+    """Écrit dans une note via l'API REST Obsidian."""
+    import ssl
+    import urllib.parse
+    import urllib.request
+
+    if not OBSIDIAN_API_KEY:
+        return HTMLResponse('<p class="error">OBSIDIAN_API_KEY non configurée.</p>')
+
+    encoded = urllib.parse.quote(path)
+    url = f"https://{OBSIDIAN_HOST}:{OBSIDIAN_PORT}/vault/{encoded}"
+    method = "PUT" if mode == "create" else "PATCH"
+    data = content.encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {OBSIDIAN_API_KEY}",
+            "Content-Type": "text/markdown",
+        },
+        method=method,
+    )
+    ctx = ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=ctx):
+            return HTMLResponse(f'<p class="success">✅ Note écrite : {path}</p>')
+    except Exception as e:
+        return HTMLResponse(f'<p class="error">Erreur écriture : {e}</p>')
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    uvicorn.run("web_ui:app", host="127.0.0.1", port=8000, reload=True)

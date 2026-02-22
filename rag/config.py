@@ -1,5 +1,9 @@
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 DB_PATH = "./chroma_db"
 COLLECTION_NAME = "obsidian-vault"
 EMBEDDING_MODEL = "nomic-embed-text"

@@ -1,3 +1,8 @@
+import itertools
+import sys
+import threading
+import time
+
 import ollama
 
 from .config import GENERATION_MODEL, MAX_CONTEXT_CHARS, MAX_DOC_CHARS, MAX_DOCS
@@ -92,7 +97,7 @@ def generate_answer(query, results):
     """
 
     print(
-        f"{Colors.HEADER}🤖 Génération de la réponse avec {GENERATION_MODEL}...{Colors.ENDC}\n"
+        f"{Colors.HEADER}🤖 Génération de la réponse avec {GENERATION_MODEL}...{Colors.ENDC}"
     )
 
     stream = ollama.chat(
@@ -104,8 +109,29 @@ def generate_answer(query, results):
         stream=True,
     )
 
+    _stop_spinner = threading.Event()
+
+    def _spin():
+        for frame in itertools.cycle(["\\  ", "|  ", "/  ", "-  "]):
+            if _stop_spinner.is_set():
+                break
+            sys.stdout.write(f"\r{Colors.WARNING}{frame}{Colors.ENDC}")
+            sys.stdout.flush()
+            time.sleep(0.1)
+        sys.stdout.write("\r   \r")
+        sys.stdout.flush()
+
+    spinner_thread = threading.Thread(target=_spin, daemon=True)
+    spinner_thread.start()
+
     full_answer = ""
+    first_chunk = True
     for chunk in stream:
+        if first_chunk:
+            _stop_spinner.set()
+            spinner_thread.join()
+            print()
+            first_chunk = False
         content = chunk["message"]["content"]
         full_answer += content
         print(content, end="", flush=True)
