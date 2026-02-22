@@ -104,8 +104,11 @@ def generate_answer(query, results):
         stream=True,
     )
 
+    full_answer = ""
     for chunk in stream:
         content = chunk["message"]["content"]
+        full_answer += content
         print(content, end="", flush=True)
 
     print(f"\n\n{Colors.WARNING}--- Fin de la réponse ---{Colors.ENDC}")
+    return full_answer

@@ -2,7 +2,9 @@ import re
 from pathlib import Path
 from typing import Any, TypedDict
 
-from rag.config import VAULT_ROOT
+import ollama
+
+from rag.config import GENERATION_MODEL, VAULT_ROOT
 
 
 class EditRequest(TypedDict):
@@ -296,6 +298,264 @@ def apply_edit(note_text: str, instruction: str) -> str:
     """
     Applique l'instruction d'édition au texte de la note.
     """
-    raise NotImplementedError("TODO V1-alpha: implémenter apply_edit")
+    base = note_text.rstrip("\n")
+    if not base:
+        return instruction
+    return f"{base}\n{instruction}"
+
+
+def _extract_meaningful_lines(answer_text: str, max_items: int = 16) -> list[str]:
+    lines = [line.strip() for line in answer_text.splitlines() if line.strip()]
+    items: list[str] = []
+
+    for line in lines:
+        if line.startswith("SOURCE:") or line.startswith("--- Fin"):
+            continue
+
+        cleaned = line
+        cleaned = re.sub(r"^#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"^[-*•]\s+", "", cleaned)
+        cleaned = re.sub(r"^\d+[\.)]\s+", "", cleaned)
+        cleaned = cleaned.strip(" -:\t")
+
+        if len(cleaned) < 4:
+            continue
+
+        if cleaned.lower().startswith(("d'après", "points clés", "ce sont")):
+            continue
+
+        if cleaned not in items:
+            items.append(cleaned)
+        if len(items) >= max_items:
+            break
+
+    return items
+
+
+def format_answer_as_todo(answer_text: str, max_items: int = 12) -> str:
+    items = _extract_meaningful_lines(answer_text=answer_text, max_items=max_items)
+
+    if not items:
+        fallback = answer_text.strip()
+        if not fallback:
+            return "- [ ] TODO"
+        short = fallback[:300].replace("\n", " ")
+        return f"- [ ] {short}"
+
+    return "\n".join(f"- [ ] {item}" for item in items)
+
+
+def format_answer_as_summary(answer_text: str, max_items: int = 8) -> str:
+    items = _extract_meaningful_lines(answer_text=answer_text, max_items=max_items)
+    if not items:
+        return answer_text.strip() or "Résumé indisponible."
+    bullets = "\n".join(f"- {item}" for item in items)
+    return f"## Résumé\n{bullets}"
+
+
+def _truncate_words(text: str, max_words: int = 12) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text.strip()
+    return " ".join(words[:max_words]).rstrip(".,;:") + "..."
+
+
+def _postprocess_checklist(text: str, max_items: int, compact: bool) -> str:
+    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    items: list[str] = []
+
+    for line in raw_lines:
+        cleaned = re.sub(r"^[-*]\s*(?:\[[ xX]\])?\s*", "", line)
+        cleaned = re.sub(r"^\d+[\.)]\s+", "", cleaned)
+        cleaned = cleaned.strip(" -\t")
+        cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+
+        if not cleaned:
+            continue
+
+        if compact and ("\\" in cleaned or len(cleaned) > 120):
+            continue
+
+        if compact:
+            cleaned = _truncate_words(cleaned, max_words=11)
+
+        if cleaned not in items:
+            items.append(cleaned)
+
+        if len(items) >= max_items:
+            break
+
+    if not items:
+        return text.strip()
+    return "\n".join(f"- [ ] {item}" for item in items)
+
+
+def _extract_key_concepts(answer_text: str, max_concepts: int = 8) -> list[str]:
+    """Première étape : extraire les concepts clés du texte source."""
+    source = answer_text.strip()[:4000]
+    
+    prompt = (
+        "EXTRAIS les concepts clés et idées principales du texte suivant. "
+        "Retourne UNIQUEMENT une liste de concepts, un par ligne, sans numérotation. "
+        "Chaque concept doit être formulé brièvement (5-10 mots max). "
+        f"Limite-toi à {max_concepts} concepts maximum.\n\n"
+        f"TEXTE SOURCE:\n{source}\n\n"
+        "CONCEPTS CLÉS (un par ligne):"
+    )
+    
+    try:
+        response = ollama.chat(
+            model=GENERATION_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = response.message.content.strip()
+        
+        # Parser les concepts
+        concepts = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Retirer numérotation
+            line = re.sub(r"^\d+[.\)-]\s*", "", line)
+            line = re.sub(r"^[-*•]\s*", "", line)
+            if line and len(line) > 3:
+                concepts.append(line)
+        return concepts[:max_concepts]
+    except Exception:
+        return []
+
+
+def _format_concepts(concepts: list[str], format_type: str) -> str:
+    """Deuxième étape : formater les concepts selon le type demandé."""
+    if not concepts:
+        return "- Aucun concept extrait"
+    
+    concepts_text = "\n".join(f"- {c}" for c in concepts)
+    
+    prompt = (
+        f"Tu dois transformer cette liste de concepts en {format_type.upper()}.\n\n"
+        f"CONCEPTS À TRANSFORMER:\n{concepts_text}\n\n"
+        f"INSTRUCTIONS POUR {format_type.upper()}:\n"
+    )
+    
+    if "todo" in format_type.lower() or "checklist" in format_type.lower():
+        prompt += (
+            "Transforme chaque concept en item actionnable et concret. "
+            "Utilise le format '- [ ] action à faire'. "
+            "Chaque item doit être une tâche réalisable, pas juste un concept."
+        )
+    elif "résumé" in format_type.lower() or "synthèse" in format_type.lower():
+        prompt += (
+            "Crée un résumé structuré avec les points essentiels. "
+            "Privilégie la clarté et la concision. "
+            "Utilise des puces ou une structure adaptée."
+        )
+    else:
+        prompt += (
+            "Organise ces concepts de manière claire et utile. "
+            "Choisis la structure la plus pertinente."
+        )
+    
+    try:
+        response = ollama.chat(
+            model=GENERATION_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return str(response.message.content or "").strip()
+    except Exception:
+        return "\n".join(f"- {c}" for c in concepts)
+
+
+def _format_last_answer_with_llm(answer_text: str, edit_query: str) -> str | None:
+    """Transforme la réponse via une approche en 2 étapes: extraction puis formatage."""
+    source_text = answer_text.strip()
+    if not source_text:
+        return None
+
+    query_lower = edit_query.lower()
+    checklist_markers = ("todo", "to-do", "checklist", "check-list", "tâche", "tache")
+    synth_markers = ("synthétique", "synthetique", "bref", "court", "compact")
+    wants_checklist = any(marker in query_lower for marker in checklist_markers)
+    wants_synth = any(marker in query_lower for marker in synth_markers)
+    max_items = 6 if wants_synth else 12
+
+    # Étape 1: Extraire les concepts clés
+    concepts = _extract_key_concepts(answer_text, max_concepts=max_items)
+    if not concepts:
+        return None
+
+    # Étape 2: Formater selon le type demandé
+    if wants_checklist:
+        return _format_concepts(concepts, "TODO checklist")
+    elif wants_synth:
+        return _format_concepts(concepts, "résumé synthétique")
+    else:
+        # Détecter si c'est une liste ou autre chose
+        list_markers = ("liste", "points", "enum", "item")
+        if any(marker in query_lower for marker in list_markers):
+            return _format_concepts(concepts, "liste structurée")
+        return _format_concepts(concepts, "format adapté")
+
+
+def format_last_answer_content(answer_text: str, edit_query: str) -> str:
+    llm_content = _format_last_answer_with_llm(answer_text=answer_text, edit_query=edit_query)
+    if llm_content:
+        return llm_content
+
+    query_lower = edit_query.lower()
+    todo_markers = ("todo", "to-do", "checklist", "check-list", "tâche", "tache")
+    summary_markers = ("résumé", "resume", "résumer", "resumer", "synthèse", "synthese")
+    keep_context_markers = ("contexte", "discussion", "complet", "tel quel")
+
+    if any(marker in query_lower for marker in todo_markers):
+        return format_answer_as_todo(answer_text)
+
+    if any(marker in query_lower for marker in summary_markers):
+        return format_answer_as_summary(answer_text)
+
+    if any(marker in query_lower for marker in keep_context_markers):
+        return answer_text.strip()
+
+    return format_answer_as_summary(answer_text)
+
+
+def _is_safe_vault_path(target_path: Path) -> bool:
+    vault_root = Path(VAULT_ROOT).resolve()
+    try:
+        resolved_target = target_path.resolve()
+    except OSError:
+        return False
+    return str(resolved_target).startswith(str(vault_root) + str(Path("/"))) or resolved_target == vault_root
+
+
+def write_edit_to_vault(intent: EditRequest, target_path: str, note_text: str) -> tuple[bool, str]:
+    action = intent.get("action", "unknown")
+    payload = (intent.get("content") or "").strip()
+
+    if action not in {"create", "add"}:
+        return False, "Action non supportée en écriture pour le moment (support: create/add)."
+
+    if not payload:
+        return False, "Contenu vide: écriture annulée."
+
+    target = Path(target_path)
+    if not target.is_absolute():
+        target = (Path(VAULT_ROOT) / target).resolve()
+
+    if not _is_safe_vault_path(target):
+        return False, "Chemin cible hors vault: écriture bloquée."
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if action == "create":
+        if target.exists():
+            return False, "La note existe déjà: create annulé."
+        target.write_text(payload + "\n", encoding="utf-8")
+        return True, f"Note créée: {target}"
+
+    updated = apply_edit(note_text=note_text, instruction=payload)
+    target.write_text(updated + "\n", encoding="utf-8")
+    return True, f"Note mise à jour: {target}"
 
 
