@@ -118,11 +118,4 @@ Pour l'édition de notes via LLM, l'ordre qui fonctionne le mieux est :
 4. **Demander confirmation** explicite pour les writes
 5. **Transformer le contenu** en 2 étapes (extraction → reformatage) pour éviter la recopie brute
 
----
 
-## Suite recommandée (prochain jalon — V1-beta)
-
-- Améliorer la résolution de cible via RAG/MCP (notes non trouvées localement).
-- Ajouter le support de l'action `edit` (modification ciblée dans une note existante).
-- Envisager un tool-calling MCP pour des opérations d'écriture plus précises (append à un heading, patch d'un bloc).
-- Ajouter une trace optionnelle du contenu transformé avant confirmation.
