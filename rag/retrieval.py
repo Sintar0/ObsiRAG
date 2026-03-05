@@ -66,7 +66,7 @@ def search_vault(query, n_results=15):
     print(f"{Colors.BLUE}🔍 Recherche vectorielle pour : '{query}'...{Colors.ENDC}")
 
     search_query = reformulate_query(query)
-    query_embed = ollama.embeddings(model=EMBEDDING_MODEL, prompt=search_query)["embedding"]
+    query_embed = ollama.embeddings(model=EMBEDDING_MODEL, prompt=search_query, keep_alive=-1)["embedding"]
 
     results = collection.query(query_embeddings=[query_embed], n_results=n_results)
 

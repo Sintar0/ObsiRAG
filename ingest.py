@@ -28,7 +28,7 @@ collection = client.get_or_create_collection(name=COLLECTION_NAME)
 
 def embed_text(text):
     try:
-        response = ollama.embeddings(model=EMBEDDING_MODEL, prompt=text)
+        response = ollama.embeddings(model=EMBEDDING_MODEL, prompt=text, keep_alive=-1)
         return response["embedding"]
     except Exception as e:
         print(f"\n❌ Erreur Ollama sur un chunk : {e}")

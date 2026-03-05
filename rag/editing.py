@@ -407,6 +407,7 @@ def _extract_key_concepts(answer_text: str, max_concepts: int = 8) -> list[str]:
         response = ollama.chat(
             model=GENERATION_MODEL,
             messages=[{"role": "user", "content": prompt}],
+            keep_alive=-1,
         )
         content = response.message.content.strip()
         
@@ -461,6 +462,7 @@ def _format_concepts(concepts: list[str], format_type: str) -> str:
         response = ollama.chat(
             model=GENERATION_MODEL,
             messages=[{"role": "user", "content": prompt}],
+            keep_alive=-1,
         )
         return str(response.message.content or "").strip()
     except Exception:

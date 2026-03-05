@@ -48,8 +48,15 @@ async def ask(query: str = Form(...)):
     """Réponse LLM en streaming SSE."""
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        yield f"data: {json.dumps({'type': 'chunk', 'content': '🔍 <i>Recherche dans le vault en cours...</i>\\n\\n'})}\n\n"
+        
         try:
-            system_prompt, user_query, sources = build_rag_context(query)
+            # On exécute l'action bloquante dans un thread pour ne pas bloquer l'async
+            import asyncio
+            loop = asyncio.get_event_loop()
+            system_prompt, user_query, sources = await loop.run_in_executor(
+                None, build_rag_context, query
+            )
         except Exception as e:
             logger.exception("Erreur construction du contexte RAG")
             yield f"data: {json.dumps({'type': 'chunk', 'content': f'❌ Erreur contexte : {e}'})}\n\n"
@@ -64,6 +71,8 @@ async def ask(query: str = Form(...)):
                     {"role": "user", "content": user_query},
                 ],
                 stream=True,
+                keep_alive=-1,
+                options={"num_ctx": 16384},
             )
 
             for chunk in stream:
@@ -148,6 +157,8 @@ async def note_edit(note_content: str = Form(...), edit_query: str = Form(...)):
                     {"role": "user", "content": prompt},
                 ],
                 stream=True,
+                keep_alive=-1,
+                options={"num_ctx": 16384},
             )
             for chunk in s:
                 content = chunk["message"]["content"]

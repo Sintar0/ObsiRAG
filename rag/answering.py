@@ -159,6 +159,8 @@ def generate_answer(query, results):
             {"role": "user", "content": query},
         ],
         stream=True,
+        keep_alive=-1,
+        options={"num_ctx": 16384},
     )
 
     _stop_spinner = threading.Event()

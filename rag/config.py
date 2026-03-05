@@ -10,9 +10,9 @@ EMBEDDING_MODEL = "nomic-embed-text"
 GENERATION_MODEL = "qwen3.5:9b"
 
 # RAG tuning
-MAX_DOCS = 8
-MAX_DOC_CHARS = 700
-MAX_CONTEXT_CHARS = 4500
+MAX_DOCS = 15
+MAX_DOC_CHARS = 1500
+MAX_CONTEXT_CHARS = 15000
 KEYWORD_WEIGHT = 60
 
 # Obsidian direct verification
