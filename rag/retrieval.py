@@ -6,7 +6,7 @@ from .styles import Colors
 from .text_processing import extract_keywords, keyword_hit_count
 
 client = chromadb.PersistentClient(path=DB_PATH)
-collection = client.get_collection(name=COLLECTION_NAME)
+collection = client.get_or_create_collection(name=COLLECTION_NAME)
 
 
 def rerank_results(results, keywords: list[str]):

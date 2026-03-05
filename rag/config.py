@@ -7,7 +7,7 @@ load_dotenv()
 DB_PATH = "./chroma_db"
 COLLECTION_NAME = "obsidian-vault"
 EMBEDDING_MODEL = "nomic-embed-text"
-GENERATION_MODEL = "mistral-small3.2:latest"
+GENERATION_MODEL = "qwen3.5:9b"
 
 # RAG tuning
 MAX_DOCS = 8

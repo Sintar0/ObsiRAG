@@ -7,7 +7,9 @@ import os
 import re
 from collections import Counter, defaultdict
 
-VAULT_PATH = os.path.expanduser("~/Obsidian")
+from rag.config import VAULT_ROOT
+
+VAULT_PATH = VAULT_ROOT
 
 # Statistiques globales
 stats = {

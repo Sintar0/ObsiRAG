@@ -1,4 +1,4 @@
-from .answering import generate_answer
+from .answering import build_rag_context, generate_answer
 from .retrieval import search_vault
 
-__all__ = ["search_vault", "generate_answer"]
+__all__ = ["search_vault", "generate_answer", "build_rag_context"]

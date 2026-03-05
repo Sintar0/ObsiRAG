@@ -3,9 +3,7 @@ from textwrap import shorten
 
 import chromadb
 
-# --- CONFIG ---
-DB_PATH = "./chroma_db"
-COLLECTION_NAME = "obsidian-vault"
+from rag.config import COLLECTION_NAME, DB_PATH
 
 # Connexion
 client = chromadb.PersistentClient(path=DB_PATH)

@@ -5,8 +5,10 @@ import time
 import chromadb
 import ollama
 
+from rag.config import COLLECTION_NAME, DB_PATH, EMBEDDING_MODEL, VAULT_ROOT
+
 # --- CONFIGURATION ---
-VAULT_PATH = os.path.expanduser("~/Obsidian")
+VAULT_PATH = VAULT_ROOT
 
 # Dossiers à ignorer (Sensible à la casse !)
 EXCLUDED_DIRS = {
@@ -20,15 +22,13 @@ EXCLUDED_DIRS = {
 }
 
 # --- SETUP ---
-DB_PATH = "./chroma_db"
-COLLECTION_NAME = "obsidian-vault"
 client = chromadb.PersistentClient(path=DB_PATH)
 collection = client.get_or_create_collection(name=COLLECTION_NAME)
 
 
 def embed_text(text):
     try:
-        response = ollama.embeddings(model="nomic-embed-text", prompt=text)
+        response = ollama.embeddings(model=EMBEDDING_MODEL, prompt=text)
         return response["embedding"]
     except Exception as e:
         print(f"\n❌ Erreur Ollama sur un chunk : {e}")
@@ -251,13 +251,14 @@ def process_file(file_path):
         metadatas = []
 
         base_name = os.path.basename(file_path)
+        rel_path = os.path.relpath(file_path, VAULT_PATH)
 
         for i, chunk in enumerate(chunks):
             vector = embed_text(chunk)
             if vector is None:
                 continue
 
-            chunk_id = f"{base_name}_{i}"
+            chunk_id = f"{rel_path}_{i}"
 
             ids.append(chunk_id)
             embeddings.append(vector)

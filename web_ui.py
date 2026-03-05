@@ -11,69 +11,27 @@ Routes :
   POST /api/note/write — écrire dans une note (active ou chemin)
 """
 
+import html
 import json
+import logging
 from typing import AsyncGenerator
 
+import ollama
 import uvicorn
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from rag.answering import generate_answer
-from rag.config import OBSIDIAN_API_KEY, OBSIDIAN_HOST, OBSIDIAN_PORT
+from rag.answering import build_rag_context
+from rag.config import GENERATION_MODEL, OBSIDIAN_API_KEY, OBSIDIAN_HOST, OBSIDIAN_PORT
 from rag.editing import format_last_answer_content
 from rag.obsidian_verify import fetch_obsidian_note
 from rag.retrieval import search_vault
 
-import ollama
-from rag.config import GENERATION_MODEL, MAX_CONTEXT_CHARS
-from rag.obsidian_verify import build_verified_context
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Obsidian RAG UI")
 templates = Jinja2Templates(directory="templates")
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _build_answer_stream(query: str):
-    """Génère la réponse LLM en streaming SSE."""
-    results = search_vault(query, n_results=15)
-    documents = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    keywords = results.get("keywords", [])
-
-    from rag.answering import compress_document
-    rag_context = ""
-    sources = set()
-    for i, doc in enumerate(documents[:8]):
-        src = metadatas[i]["source"].split("/")[-1]
-        sources.add(src)
-        compressed = compress_document(doc, keywords, 700)
-        if compressed:
-            rag_context += f"---\nSOURCE: {src}\nCONTENU:\n{compressed}\n\n"
-
-    verified = build_verified_context(metadatas, keywords, query=query)
-    context = ""
-    if verified:
-        context = f"=== CONTEXTE MCP (PRIORITAIRE) ===\n{verified}\n"
-    remaining = MAX_CONTEXT_CHARS - len(context)
-    if rag_context and remaining > 200:
-        context += f"\n=== CONTEXTE RAG (COMPLEMENT) ===\n{rag_context}"[:remaining]
-
-    system_prompt = f"""Tu es un assistant personnel connecté aux notes Obsidian de l'utilisateur.
-Règles :
-1. Priorité au bloc CONTEXTE MCP s'il existe.
-2. Cite tes sources (ex: [Note.md]).
-3. Réponds de façon structurée et pédagogique.
-4. Si rien de pertinent, réponds avec tes connaissances générales en le précisant.
-
-CONTEXTE :
-{context}"""
-
-    return system_prompt, query, list(sources)
 
 
 # ---------------------------------------------------------------------------
@@ -90,22 +48,31 @@ async def ask(query: str = Form(...)):
     """Réponse LLM en streaming SSE."""
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        system_prompt, user_query, sources = _build_answer_stream(query)
-        full_answer = ""
+        try:
+            system_prompt, user_query, sources = build_rag_context(query)
+        except Exception as e:
+            logger.exception("Erreur construction du contexte RAG")
+            yield f"data: {json.dumps({'type': 'chunk', 'content': f'❌ Erreur contexte : {e}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+            return
 
-        stream = ollama.chat(
-            model=GENERATION_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_query},
-            ],
-            stream=True,
-        )
+        try:
+            stream = ollama.chat(
+                model=GENERATION_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_query},
+                ],
+                stream=True,
+            )
 
-        for chunk in stream:
-            content = chunk["message"]["content"]
-            full_answer += content
-            yield f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
+            for chunk in stream:
+                content = chunk["message"]["content"]
+                yield f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
+
+        except Exception as e:
+            logger.exception("Erreur Ollama (streaming ask)")
+            yield f"data: {json.dumps({'type': 'chunk', 'content': f'❌ Erreur LLM : {e}'})}\n\n"
 
         yield f"data: {json.dumps({'type': 'done', 'sources': sources})}\n\n"
 
@@ -119,16 +86,16 @@ async def search(query: str = Form(...)):
     docs = results["documents"][0][:5]
     metas = results["metadatas"][0][:5]
 
-    html = ""
+    fragments = ""
     for doc, meta in zip(docs, metas):
-        src = meta.get("source", "").split("/")[-1]
-        preview = doc[:300].replace("<", "&lt;").replace(">", "&gt;")
-        html += f"""
+        src = html.escape(meta.get("source", "").split("/")[-1])
+        preview = html.escape(doc[:300])
+        fragments += f"""
         <div class="chunk">
             <div class="chunk-source">📄 {src}</div>
             <div class="chunk-content">{preview}…</div>
         </div>"""
-    return HTMLResponse(html or "<p class='empty'>Aucun résultat.</p>")
+    return HTMLResponse(fragments or "<p class='empty'>Aucun résultat.</p>")
 
 
 @app.post("/api/todo")
@@ -173,17 +140,21 @@ async def note_edit(note_content: str = Form(...), edit_query: str = Form(...)):
     prompt = f"NOTE ORIGINALE:\n{note_content}\n\nINSTRUCTION: {edit_query}"
 
     async def stream_edit():
-        s = ollama.chat(
-            model=GENERATION_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            stream=True,
-        )
-        for chunk in s:
-            content = chunk["message"]["content"]
-            yield f"data: {json.dumps({'content': content})}\n\n"
+        try:
+            s = ollama.chat(
+                model=GENERATION_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=True,
+            )
+            for chunk in s:
+                content = chunk["message"]["content"]
+                yield f"data: {json.dumps({'content': content})}\n\n"
+        except Exception as e:
+            logger.exception("Erreur Ollama (streaming note_edit)")
+            yield f"data: {json.dumps({'content': f'❌ Erreur LLM : {e}'})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
 
     return StreamingResponse(stream_edit(), media_type="text/event-stream")
