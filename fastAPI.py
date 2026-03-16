@@ -20,7 +20,6 @@ import ollama
 import uvicorn
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
 
 from rag.answering import build_rag_context
 from rag.config import GENERATION_MODEL, OBSIDIAN_API_KEY, OBSIDIAN_HOST, OBSIDIAN_PORT
@@ -31,16 +30,13 @@ from rag.retrieval import search_vault
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Obsidian RAG UI")
-templates = Jinja2Templates(directory="templates")
 
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+
 
 
 @app.post("/api/ask")
@@ -48,7 +44,7 @@ async def ask(query: str = Form(...)):
     """Réponse LLM en streaming SSE."""
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        yield f"data: {json.dumps({'type': 'chunk', 'content': '🔍 <i>Recherche dans le vault en cours...</i>\\n\\n'})}\n\n"
+        yield "data: " + json.dumps({'type': 'chunk', 'content': '🔍 <i>Recherche dans le vault en cours...</i>\n\n'}) + "\n\n"
         
         try:
             # On exécute l'action bloquante dans un thread pour ne pas bloquer l'async

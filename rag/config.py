@@ -7,7 +7,7 @@ load_dotenv()
 DB_PATH = "./chroma_db"
 COLLECTION_NAME = "obsidian-vault"
 EMBEDDING_MODEL = "nomic-embed-text"
-GENERATION_MODEL = "qwen3.5:9b"
+GENERATION_MODEL = "hf.co/bartowski/LiquidAI_LFM2-24B-A2B-GGUF:Q4_K_M"
 
 # RAG tuning
 MAX_DOCS = 15
